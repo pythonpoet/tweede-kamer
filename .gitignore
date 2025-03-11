@@ -1,9 +1,14 @@
 # Devenv
 .devenv*
 devenv.local.nix
+poetry.lock
 
 # direnv
 .direnv
+.venv
+.vscode
 
 # pre-commit
 .pre-commit-config.yaml
+
+.ipynb_checkpoints
