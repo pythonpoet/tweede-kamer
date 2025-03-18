@@ -10,6 +10,9 @@ from nltk.tokenize import sent_tokenize
 
 root_dir = "data/speeches2014-2024"
 
+def translate(text):
+    return GoogleTranslator(source='auto', target='en').translate(text)
+
 def split_sentences(text, max_chunk_size=4000):
 
     if len(text) <= max_chunk_size:
