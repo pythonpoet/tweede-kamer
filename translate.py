@@ -5,6 +5,7 @@ import nltk
 import os
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Setup logging
 logging.basicConfig(filename="translation_errors.log", level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -14,9 +15,10 @@ nltk.download('punkt')
 from nltk.tokenize import sent_tokenize
 
 root_dir = "data/speeches2014-2024"
-REQUESTS_PER_MINUTE = 300  # Adjust based on API limits
+REQUESTS_PER_MINUTE = 30  # Adjust based on API limits
 REQUEST_DELAY = 60 / REQUESTS_PER_MINUTE  # Time delay between requests
-MAX_RETRIES = 5  # Maximum retries on failure
+MAX_RETRIES = 5  # Max retries on failure
+MAX_WORKERS = 15  # Number of concurrent threads (adjust based on rate limits)
 
 def translate(text):
     """Translate text with automatic retries if rate limit is exceeded."""
@@ -28,10 +30,8 @@ def translate(text):
         try:
             time.sleep(REQUEST_DELAY)  # Enforce rate limit
             translated = GoogleTranslator(source='auto', target='en').translate(text)
-            
             if translated:
                 return translated  # Successful translation
-            
         except Exception as e:
             error_message = str(e)
             if "Rate Limit Exceeded" in error_message or "quota" in error_message:
@@ -88,6 +88,24 @@ def safe_translate(text, max_text_length=4000):
         return ""
     return split_translate(chunks)
 
+def translate_dataframe_parallel(df, text_column):
+    """Translate the DataFrame in parallel using ThreadPoolExecutor."""
+    tqdm.pandas(desc="Translating speeches")
+    results = [None] * len(df)  # Pre-allocate result list
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_index = {executor.submit(safe_translate, text): idx for idx, text in enumerate(df[text_column])}
+        
+        for future in tqdm(as_completed(future_to_index), total=len(future_to_index), desc="Processing translations"):
+            idx = future_to_index[future]
+            try:
+                results[idx] = future.result()
+            except Exception as e:
+                logging.error(f"Error in parallel translation: {e}")
+                results[idx] = ""
+
+    return results
+
 if __name__ == "__main__":
     for filename in os.listdir(root_dir):
         file_path = os.path.join(root_dir, filename)
@@ -99,8 +117,7 @@ if __name__ == "__main__":
                 logging.error(f"Missing 'speech_text' column in {filename}")
                 continue
 
-            tqdm.pandas(desc=f"Translating {filename}")
-            df['speech_text_google_translate'] = df['speech_text'].progress_apply(safe_translate)
+            df['speech_text_google_translate'] = translate_dataframe_parallel(df, 'speech_text')
 
             df.to_csv(file_path, index=False)
             print(f"Processed and saved: {filename}")
