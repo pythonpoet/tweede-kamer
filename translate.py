@@ -3,6 +3,7 @@ import pandas as pd
 from deep_translator import GoogleTranslator
 from tqdm import tqdm
 import nltk
+import os
 nltk.download('punkt')
 nltk.download('punkt_tab')  # Download sentence tokenizer data
 from nltk.tokenize import sent_tokenize
