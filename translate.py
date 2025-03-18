@@ -18,7 +18,7 @@ root_dir = "data/speeches2014-2024"
 REQUESTS_PER_MINUTE = 30  # Adjust based on API limits
 REQUEST_DELAY = 60 / REQUESTS_PER_MINUTE  # Time delay between requests
 MAX_RETRIES = 5  # Max retries on failure
-MAX_WORKERS = 15  # Number of concurrent threads (adjust based on rate limits)
+MAX_WORKERS = 40  # Number of concurrent threads (adjust based on rate limits)
 
 def translate(text):
     """Translate text with automatic retries if rate limit is exceeded."""
