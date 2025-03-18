@@ -11,6 +11,7 @@ pandas = "^2.2.3"
 jupyter = "^1.1.1"
 mistralai = "^1.5.1"
 datauri = "^1.0.0"
+modal = "^0.73.108"
 
 
 [build-system]

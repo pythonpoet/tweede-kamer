@@ -233,6 +233,7 @@ Zoo ook is in de Memorie van Antwoord medegedeeld, waarop de milieien recht heef
 
 Vervolgens wijs ik op de zaak van den milicien-korporaal van Beek, wiens geschiedenis in de stukken staat, die voor het één dag te laat doen afteekenen van zijn verlofpas 14 dagen strafdienst heeft gekregen.
 
+
 De Minister zegt, dat de man wist wat hij te doen had.
 Ik kan mij voorstellen, dat die man niet wist, dat hij binnen 30 dagen zijn zakboekje moest laten afteekenen, want het heet in de kazerne altijd, dat dit binnen een maand moet geschieden. De man had zijn vrouw met deze afteekening belast. Hij was van goeden wilt hij heeft zich tot korporaal laten opleiden; waarom moet oo'n man nu 14 dagen strafdienst hebben? De Minister is ook slauf van de wel, zoials defig in de stukken staat, maar één dag was voor zoi iemand toch voldoende, als er dan gestraft moet worden; als men dan niet aannemen kan niet een vergissing te doen te hebben.
 
@@ -421,7 +422,7 @@ Toen mij die circulaire in handen kwam, meende ik, dat dit een vergissing was en
 
 De Minister heeft in de stukken er op geantwoord. Ik weet dat het zoo erg niet is, en dat men van te voren wel iets kan gebruiken in een of ander lokaal, maar dit kan toch de bedoeling van den Minister niet zijn, want dan zon hij m. i. het drankmisbruik in de hand werken. Ik geloof, dat het geen bezwaar zou opleveren drank toe te laten, mits het slechts geen alcoholische dranken zijn.
 
-De heer Thomson: Wanneer er maar, niet] voor betaald behoeft te worden. Dat is de quaestie.
+De heer Thomson: Wanneer er maar, niet voor betaald behoeft te worden. Dat is de quaestie.
 
 De heer Passtoors: Dat spreekt toch vanzelf, dat men er voor betalen moet. Maar 't is de onbillijkheid of eigenlijk de malligheid iemand in de panze te verbieden iets te drinken.
 
