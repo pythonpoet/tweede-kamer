@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np  
 import os
 # Setup logging
-logging.basicConfig(filename="translation_errors.log", level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(filename="translation_errors.log", level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Proxy List URL
 PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"  # Replace with actual proxy URL
@@ -114,6 +114,7 @@ if __name__ == "__main__":
 
     for filename in os.listdir(root_dir):
         file_path = os.path.join(root_dir, filename)
+        logging.DEBUG(f"run file {filename}")
 
         try:
             df = pd.read_csv(file_path)
