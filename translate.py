@@ -1,101 +1,104 @@
+import requests
 import pandas as pd
+import time
+import random
+import logging
 from deep_translator import GoogleTranslator
 from tqdm import tqdm
-import nltk
-import os
-import time
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np  # Added for NaN checking
 
 # Setup logging
-logging.basicConfig(filename="translation_errors.log", level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(filename="translation_errors.log", level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Download necessary NLTK data
-nltk.download('punkt')
-from nltk.tokenize import sent_tokenize
+# Proxy List URL
+PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"  # Replace with actual proxy URL
 
-root_dir = "data/speeches2014-2024"
-REQUESTS_PER_MINUTE = 30  # Adjust based on API limits
-REQUEST_DELAY = 60 / REQUESTS_PER_MINUTE  # Time delay between requests
-MAX_RETRIES = 5  # Max retries on failure
-MAX_WORKERS = 40  # Number of concurrent threads (adjust based on rate limits)
+# Google API Limits
+REQUESTS_PER_SECOND = 5
+MAX_RETRIES = 5
+MAX_WORKERS = 3  # Keep requests under limit
+REQUEST_DELAY = 1 / REQUESTS_PER_SECOND  # Ensure we don't exceed 5 requests/sec
 
-def translate(text):
-    """Translate text with automatic retries if rate limit is exceeded."""
-    if not text or not isinstance(text, str):
+# Store used proxies
+used_proxies = set()
+
+def fetch_proxies():
+    """Fetches the latest proxies from the website."""
+    try:
+        response = requests.get(PROXY_LIST_URL, timeout=10)
+        response.raise_for_status()
+        proxies = response.text.split("\n")
+        return [proxy.strip() for proxy in proxies if proxy.strip()]
+    except requests.RequestException as e:
+        logging.error(f"Failed to fetch proxies: {e}")
+        return []
+
+def get_new_proxy():
+    """Fetches a new proxy that hasn't been used recently."""
+    global used_proxies
+    proxies = fetch_proxies()
+    
+    if not proxies:
+        logging.error("No proxies available!")
+        return None
+    
+    new_proxies = [proxy for proxy in proxies if proxy not in used_proxies]
+    
+    if not new_proxies:  # If all proxies are used, reset the set
+        used_proxies.clear()
+        new_proxies = proxies
+
+    proxy = random.choice(new_proxies)  # Pick a random new proxy
+    used_proxies.add(proxy)  # Mark it as used
+    return proxy
+
+def translate(text, proxy=None):
+    """Translates text using GoogleTranslator with automatic retries and rate limit handling."""
+    if not text or not isinstance(text, str) or text.strip() == "":
         return ""
 
     retries = 0
     while retries < MAX_RETRIES:
         try:
             time.sleep(REQUEST_DELAY)  # Enforce rate limit
-            translated = GoogleTranslator(source='auto', target='en').translate(text)
+            proxies = {"http": proxy, "https": proxy} if proxy else None
+            translated = GoogleTranslator(source='auto', target='en').translate(text, proxies=proxies)
             if translated:
-                return translated  # Successful translation
+                return translated
         except Exception as e:
             error_message = str(e)
-            if "Rate Limit Exceeded" in error_message or "quota" in error_message:
+            logging.warning(f"Translation failed with proxy {proxy}: {error_message}")
+
+            # If rate limit is exceeded, wait and retry
+            if "too many requests" in error_message.lower():
                 wait_time = (2 ** retries) * REQUEST_DELAY  # Exponential backoff
                 logging.warning(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
                 time.sleep(wait_time)
-                retries += 1
             else:
-                logging.error(f"Translation error: {error_message} | Text: {text[:50]}")
-                break  # Stop retrying for non-quota errors
+                proxy = get_new_proxy()  # Get a fresh proxy
 
-    return ""  # Return empty string if all retries fail
+            retries += 1
 
-def split_sentences(text, max_chunk_size=4000):
-    """Split text into smaller chunks while preserving sentence boundaries."""
-    if not text or not isinstance(text, str):
-        return []
-    
-    if len(text) <= max_chunk_size:
-        return [text]
+    logging.error(f"Failed to translate after {MAX_RETRIES} retries.")
+    return ""
 
-    sentences = sent_tokenize(text)
-    chunks = []
-    current_chunk = []
-    current_length = 0
-
-    for sentence in sentences:
-        sentence_length = len(sentence)
-        if current_length + sentence_length > max_chunk_size:
-            chunks.append(' '.join(current_chunk))
-            current_chunk = [sentence]
-            current_length = sentence_length
-        else:
-            current_chunk.append(sentence)
-            current_length += sentence_length
-
-    if current_chunk:
-        chunks.append(' '.join(current_chunk))
-    
-    return chunks
-
-def split_translate(chunks):
-    """Translate each chunk sequentially with retry handling."""
-    translated_text = []
-    for chunk in chunks:
-        translated = translate(chunk)
-        translated_text.append(translated)
-    return ' '.join(translated_text)
-
-def safe_translate(text, max_text_length=4000):
-    """Ensure translation handles errors properly."""
-    chunks = split_sentences(text, max_chunk_size=max_text_length)
-    if not chunks:
-        return ""
-    return split_translate(chunks)
-
-def translate_dataframe_parallel(df, text_column):
-    """Translate the DataFrame in parallel using ThreadPoolExecutor."""
+def translate_dataframe_parallel(df, text_column, translated_column):
+    """Translates only missing values in a Pandas DataFrame in parallel."""
     tqdm.pandas(desc="Translating speeches")
-    results = [None] * len(df)  # Pre-allocate result list
+
+    # Find indices where translation is missing (NaN)
+    missing_indices = df[df[translated_column].isna()].index.tolist()
+    
+    if not missing_indices:
+        print("No missing translations. Skipping translation process.")
+        return df[translated_column]  # Return the same column unchanged
+
+    results = df[translated_column].copy()  # Keep existing translations
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_index = {executor.submit(safe_translate, text): idx for idx, text in enumerate(df[text_column])}
-        
+        future_to_index = {executor.submit(translate, df.loc[idx, text_column], get_new_proxy()): idx for idx in missing_indices}
+
         for future in tqdm(as_completed(future_to_index), total=len(future_to_index), desc="Processing translations"):
             idx = future_to_index[future]
             try:
@@ -107,6 +110,8 @@ def translate_dataframe_parallel(df, text_column):
     return results
 
 if __name__ == "__main__":
+    root_dir = "data/speeches2014-2024"
+
     for filename in os.listdir(root_dir):
         file_path = os.path.join(root_dir, filename)
 
@@ -117,7 +122,11 @@ if __name__ == "__main__":
                 logging.error(f"Missing 'speech_text' column in {filename}")
                 continue
 
-            df['speech_text_google_translate'] = translate_dataframe_parallel(df, 'speech_text')
+            if 'speech_text_google_translate' not in df.columns:
+                df['speech_text_google_translate'] = np.nan  # Initialize column if missing
+
+            # Only translate NaN values
+            df['speech_text_google_translate'] = translate_dataframe_parallel(df, 'speech_text', 'speech_text_google_translate')
 
             df.to_csv(file_path, index=False)
             print(f"Processed and saved: {filename}")
