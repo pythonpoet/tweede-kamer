@@ -6,8 +6,8 @@ import logging
 from deep_translator import GoogleTranslator
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import numpy as np  # Added for NaN checking
-
+import numpy as np  
+import os
 # Setup logging
 logging.basicConfig(filename="translation_errors.log", level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 
