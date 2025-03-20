@@ -19,6 +19,7 @@ jupyter = "^1.1.1"
 mistralai = "^1.5.1"
 datauri = "^1.0.0"
 modal = "^0.73.108"
+deep-translator = "^1.11.4"
 
 
 [tool.uv.dependencies]

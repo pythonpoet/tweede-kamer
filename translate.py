@@ -24,7 +24,7 @@ logging.basicConfig(
 
 
 # Google API Limits
-REQUESTS_PER_SECOND = 5
+REQUESTS_PER_SECOND = 100
 BATCH_SIZE = 10
 MAX_RETRIES = 5
 REQUEST_DELAY = 1 / REQUESTS_PER_SECOND
@@ -114,7 +114,7 @@ async def async_translate_bulk(text_list, proxy=None):
 # ... [Keep all previous imports and setup code unchanged] ...
 
 async def process_dataframe_async(df, text_column, translated_column):
-    """Processes missing translations in batches asynchronously with real-time progress updates."""
+    """Processes missing translations in batches asynchronously."""
     missing_indices = df[df[translated_column].isna()].index.tolist()
     if not missing_indices:
         logging.info("No missing translations, skipping translation process.")
@@ -122,38 +122,28 @@ async def process_dataframe_async(df, text_column, translated_column):
 
     results = df[translated_column].copy()
     
-    async def batch_translation_wrapper(start_idx, batch_texts, proxy):
-        """Wrapper to associate batch results with their start index."""
-        translations = await async_translate_bulk(batch_texts, proxy)
-        return start_idx, translations
+    # Create progress bar outside the processing loop
+    pbar = tqdm_asyncio(total=len(missing_indices), desc="Translating speeches", unit="rows")
 
-    # Create translation tasks for all batches
-    tasks = []
-    for batch_start in range(0, len(missing_indices), BATCH_SIZE):
+    async def process_batch(batch_start):
         batch_end = batch_start + BATCH_SIZE
         batch_indices = missing_indices[batch_start:batch_end]
         batch_texts = df.loc[batch_indices, text_column].tolist()
         proxy = get_proxy()
-        tasks.append(
-            asyncio.create_task(
-                batch_translation_wrapper(batch_start, batch_texts, proxy)
-            )
-        )
+        
+        translations = await async_translate_bulk(batch_texts, proxy)
+        return batch_start, translations
 
-    # Process results as they complete with progress tracking
-    with tqdm_asyncio.tqdm(
-        total=len(missing_indices), 
-        desc="Translating speeches", 
-        unit="rows"
-    ) as progress_bar:
-        for future in asyncio.as_completed(tasks):
-            batch_start, translations = await future
-            # Update results and progress bar
-            for batch_offset, translation in enumerate(translations):
-                results_idx = missing_indices[batch_start + batch_offset]
-                results[results_idx] = translation
-            progress_bar.update(len(translations))
+    tasks = [process_batch(i) for i in range(0, len(missing_indices), BATCH_SIZE)]
 
+    for future in asyncio.as_completed(tasks):
+        batch_start, translations = await future
+        for offset, translation in enumerate(translations):
+            results_idx = missing_indices[batch_start + offset]
+            results[results_idx] = translation
+        pbar.update(len(translations))
+
+    pbar.close()
     return results
 
 async def process_all_files():
