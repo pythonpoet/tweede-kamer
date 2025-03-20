@@ -8,6 +8,7 @@ import numpy as np
 import os
 from tqdm.asyncio import tqdm_asyncio
 from deep_translator import GoogleTranslator
+from urllib.parse import urlparse
 
 # proxyfiy api = 8oEq6EJrQZzGKgMEQTzfaMNc4hgMLaXd6EqNRi5eXGmA
 # https://proxifly.dev/
@@ -62,7 +63,12 @@ def get_proxy():
         proxy = proxies[current_proxy_index % len(proxies)]
         current_proxy_index += 1  # Move to the next proxy in the list
         logging.info(f"Using proxy: {proxy}")
-        return proxy
+        parsed_url = urlparse(proxy)
+        # Extract the IP address and port
+        ip_address = parsed_url.hostname
+        port = parsed_url.port
+        
+        return {"http": f"{ip_address}:{port}"}
     else:
         logging.warning("No proxies available, using direct connection.")
         return None
