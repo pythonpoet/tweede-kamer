@@ -123,27 +123,27 @@ async def process_dataframe_async(df, text_column, translated_column):
 
     results = df[translated_column].copy()
     
-    # Use tqdm_asyncio correctly
-    async with tqdm_asyncio(total=len(missing_indices), desc="Translating speeches", unit="rows") as tqdm_bar:
-        tasks = []
-        for i in range(0, len(missing_indices), BATCH_SIZE):
-            batch_indices = missing_indices[i : i + BATCH_SIZE]
-            batch_texts = df.loc[batch_indices, text_column].tolist()
-            proxy = get_proxy()
+    tqdm_bar = tqdm_asyncio(total=len(missing_indices), desc="Translating speeches", unit="rows")
 
-            logging.info(f"Processing batch {i // BATCH_SIZE + 1}: {len(batch_texts)} texts with proxy {proxy}")
-            tasks.append(async_translate_bulk(batch_texts, proxy))
+    tasks = []
+    for i in range(0, len(missing_indices), BATCH_SIZE):
+        batch_indices = missing_indices[i : i + BATCH_SIZE]
+        batch_texts = df.loc[batch_indices, text_column].tolist()
+        proxy = get_proxy()
 
-        batch_results = await asyncio.gather(*tasks)
+        logging.info(f"Processing batch {i // BATCH_SIZE + 1}: {len(batch_texts)} texts with proxy {proxy}")
+        tasks.append(async_translate_bulk(batch_texts, proxy))
 
-        for batch, batch_indices in zip(batch_results, range(0, len(missing_indices), BATCH_SIZE)):
-            for idx, translation in zip(missing_indices[batch_indices : batch_indices + BATCH_SIZE], batch):
-                results[idx] = translation
-                await tqdm_bar.update(1)  # Ensure updates happen in async context
+    batch_results = await asyncio.gather(*tasks)
+
+    for batch, batch_indices in zip(batch_results, range(0, len(missing_indices), BATCH_SIZE)):
+        for idx, translation in zip(missing_indices[batch_indices : batch_indices + BATCH_SIZE], batch):
+            results[idx] = translation
+            tqdm_bar.update(1)  # Update progress bar
+
+    tqdm_bar.close()  # Close progress bar properly
 
     return results
-
-
 
 async def process_all_files():
     """Processes all speech files asynchronously."""
