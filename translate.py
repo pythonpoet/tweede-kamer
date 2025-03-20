@@ -64,11 +64,8 @@ def get_proxy():
         current_proxy_index += 1  # Move to the next proxy in the list
         logging.info(f"Using proxy: {proxy}")
         parsed_url = urlparse(proxy)
-        # Extract the IP address and port
-        ip_address = parsed_url.hostname
-        port = parsed_url.port
-        
-        return {"http": f"{ip_address}:{port}"}
+
+        return parsed_url.hostname
     else:
         logging.warning("No proxies available, using direct connection.")
         return None
@@ -84,7 +81,7 @@ async def async_translate_bulk(text_list, proxy=None):
         try:
             logging.info(f"Translating batch with proxy: {proxy} (Attempt {retries+1})")
             translator = GoogleTranslator(
-                source="auto", target="en", proxies={"http": proxy, "https": proxy} if proxy else None
+                source="auto", target="en", proxies={"http": proxy } if proxy else None
             )
 
             start_time = time.time()
