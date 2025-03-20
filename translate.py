@@ -7,16 +7,15 @@ import logging
 import numpy as np
 import os
 from tqdm.asyncio import tqdm_asyncio
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 
-#proxyfiy api = 8oEq6EJrQZzGKgMEQTzfaMNc4hgMLaXd6EqNRi5eXGmA
-#https://proxifly.dev/
-
+# proxyfiy api = 8oEq6EJrQZzGKgMEQTzfaMNc4hgMLaXd6EqNRi5eXGmA
+# https://proxifly.dev/
 
 # Setup logging
 logging.basicConfig(filename="translation_errors.log", level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Proxy List URL (Update with your real URL)
+# Proxy List URL (Replace with actual proxy list URL)
 PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
 
 # Google API Limits
@@ -66,9 +65,9 @@ async def async_translate_bulk(text_list, proxy=None):
     retries = 0
     while retries < MAX_RETRIES:
         try:
-            translator = Translator(proxies={"http": proxy, "https": proxy} if proxy else None)
-            translations = await asyncio.to_thread(translator.translate, text_list, dest="en")  # Run sync function in thread
-            return [t.text if t else "" for t in translations]  # Return list of translated text
+            translator = GoogleTranslator(source="auto", target="en", proxies={"http": proxy, "https": proxy} if proxy else None)
+            translations = [translator.translate(text) for text in text_list]  # Bulk translation
+            return translations
         except Exception as e:
             error_message = str(e)
             logging.warning(f"Bulk translation failed with proxy {proxy}: {error_message}")
