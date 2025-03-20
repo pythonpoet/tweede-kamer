@@ -81,11 +81,16 @@ async def async_translate_bulk(text_list, proxy=None):
         try:
             logging.info(f"Translating batch with proxy: {proxy} (Attempt {retries+1})")
             translator = GoogleTranslator(
-                source="auto", target="en", proxies={"http": proxy } if proxy else None
+                source="auto", target="en", proxies={"http": proxy} if proxy else None
             )
 
             start_time = time.time()
-            translations = [translator.translate(text) for text in text_list]  # Bulk translation
+            
+            # Run synchronous translation in a separate thread
+            translations = await asyncio.gather(
+                *(asyncio.to_thread(translator.translate, text) for text in text_list)
+            )
+            
             end_time = time.time()
             logging.info(f"Translated {len(text_list)} texts in {end_time - start_time:.2f} seconds.")
 
@@ -108,35 +113,36 @@ async def async_translate_bulk(text_list, proxy=None):
     return [""] * len(text_list)  # Return empty translations for failed attempts
 
 
+
 async def process_dataframe_async(df, text_column, translated_column):
     """Processes missing translations in batches asynchronously."""
-    tqdm_bar = tqdm_asyncio(total=df.shape[0], desc="Translating speeches", unit="rows")
-
     missing_indices = df[df[translated_column].isna()].index.tolist()
     if not missing_indices:
         logging.info("No missing translations, skipping translation process.")
         return df[translated_column]
 
     results = df[translated_column].copy()
-    tasks = []
+    
+    # Use tqdm_asyncio correctly
+    async with tqdm_asyncio(total=len(missing_indices), desc="Translating speeches", unit="rows") as tqdm_bar:
+        tasks = []
+        for i in range(0, len(missing_indices), BATCH_SIZE):
+            batch_indices = missing_indices[i : i + BATCH_SIZE]
+            batch_texts = df.loc[batch_indices, text_column].tolist()
+            proxy = get_proxy()
 
-    for i in range(0, len(missing_indices), BATCH_SIZE):
-        batch_indices = missing_indices[i : i + BATCH_SIZE]
-        batch_texts = df.loc[batch_indices, text_column].tolist()
-        proxy = get_proxy()
+            logging.info(f"Processing batch {i // BATCH_SIZE + 1}: {len(batch_texts)} texts with proxy {proxy}")
+            tasks.append(async_translate_bulk(batch_texts, proxy))
 
-        logging.info(f"Processing batch {i // BATCH_SIZE + 1}: {len(batch_texts)} texts with proxy {proxy}")
-        tasks.append(async_translate_bulk(batch_texts, proxy))
+        batch_results = await asyncio.gather(*tasks)
 
-    batch_results = await asyncio.gather(*tasks)
+        for batch, batch_indices in zip(batch_results, range(0, len(missing_indices), BATCH_SIZE)):
+            for idx, translation in zip(missing_indices[batch_indices : batch_indices + BATCH_SIZE], batch):
+                results[idx] = translation
+                await tqdm_bar.update(1)  # Ensure updates happen in async context
 
-    for batch, batch_indices in zip(batch_results, missing_indices):
-        for idx, translation in zip(batch_indices, batch):
-            results[idx] = translation
-            tqdm_bar.update(1)
-
-    tqdm_bar.close()
     return results
+
 
 
 async def process_all_files():
