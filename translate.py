@@ -24,7 +24,7 @@ logging.basicConfig(
 
 
 # Google API Limits
-REQUESTS_PER_SECOND = 100
+REQUESTS_PER_SECOND = 10
 BATCH_SIZE = 10
 MAX_RETRIES = 5
 REQUEST_DELAY = 1 / REQUESTS_PER_SECOND
@@ -78,7 +78,7 @@ async def async_translate_bulk(text_list, proxy=None):
         try:
             logging.info(f"Translating batch with proxy: {proxy} (Attempt {retries+1})")
             translator = GoogleTranslator(
-                source="auto", target="en", proxies={"http": proxy} if proxy else None
+                source="auto", target="en", proxies={"http": proxy}
             )
 
             start_time = time.time()
@@ -108,10 +108,6 @@ async def async_translate_bulk(text_list, proxy=None):
 
     logging.error("Failed to translate after multiple retries.")
     return [""] * len(text_list)  # Return empty translations for failed attempts
-
-
-
-# ... [Keep all previous imports and setup code unchanged] ...
 
 async def process_dataframe_async(df, text_column, translated_column):
     """Processes missing translations in batches asynchronously."""
