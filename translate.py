@@ -1,24 +1,29 @@
+import asyncio
 import requests
 import pandas as pd
 import time
 import random
 import logging
-from deep_translator import GoogleTranslator
-from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import numpy as np  
+import numpy as np
 import os
-# Setup logging
-logging.basicConfig(filename="translation_errors.log", level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+from tqdm.asyncio import tqdm_asyncio
+from googletrans import Translator
 
-# Proxy List URL
-PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"  # Replace with actual proxy URL
+#proxyfiy api = 8oEq6EJrQZzGKgMEQTzfaMNc4hgMLaXd6EqNRi5eXGmA
+#https://proxifly.dev/
+
+
+# Setup logging
+logging.basicConfig(filename="translation_errors.log", level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Proxy List URL (Update with your real URL)
+PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
 
 # Google API Limits
 REQUESTS_PER_SECOND = 5
+BATCH_SIZE = 10  # Number of translations per batch
 MAX_RETRIES = 5
-MAX_WORKERS = 3  # Keep requests under limit
-REQUEST_DELAY = 1 / REQUESTS_PER_SECOND  # Ensure we don't exceed 5 requests/sec
+REQUEST_DELAY = 1 / REQUESTS_PER_SECOND  # Ensures we don't exceed 5 requests/sec
 
 # Store used proxies
 used_proxies = set()
@@ -53,68 +58,73 @@ def get_new_proxy():
     used_proxies.add(proxy)  # Mark it as used
     return proxy
 
-def translate(text, proxy=None):
-    """Translates text using GoogleTranslator with automatic retries and rate limit handling."""
-    if not text or not isinstance(text, str) or text.strip() == "":
-        return ""
+async def async_translate_bulk(text_list, proxy=None):
+    """Translates a list of texts using GoogleTranslator in bulk with automatic retries."""
+    if not text_list:
+        return []
 
     retries = 0
     while retries < MAX_RETRIES:
         try:
-            time.sleep(REQUEST_DELAY)  # Enforce rate limit
-            proxies = {"http": proxy, "https": proxy} if proxy else None
-            translated = GoogleTranslator(source='auto', target='en').translate(text, proxies=proxies)
-            if translated:
-                return translated
+            translator = Translator(proxies={"http": proxy, "https": proxy} if proxy else None)
+            translations = await asyncio.to_thread(translator.translate, text_list, dest="en")  # Run sync function in thread
+            return [t.text if t else "" for t in translations]  # Return list of translated text
         except Exception as e:
             error_message = str(e)
-            logging.warning(f"Translation failed with proxy {proxy}: {error_message}")
+            logging.warning(f"Bulk translation failed with proxy {proxy}: {error_message}")
 
             # If rate limit is exceeded, wait and retry
             if "too many requests" in error_message.lower():
                 wait_time = (2 ** retries) * REQUEST_DELAY  # Exponential backoff
                 logging.warning(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
-                time.sleep(wait_time)
+                await asyncio.sleep(wait_time)
             else:
                 proxy = get_new_proxy()  # Get a fresh proxy
 
             retries += 1
 
-    logging.error(f"Failed to translate after {MAX_RETRIES} retries.")
-    return ""
+    logging.error("Failed to translate bulk data after retries.")
+    return [""] * len(text_list)  # Return empty translations for failed attempts
 
-def translate_dataframe_parallel(df, text_column, translated_column):
-    """Translates only missing values in a Pandas DataFrame in parallel."""
-    tqdm.pandas(desc="Translating speeches")
+async def process_dataframe_async(df, text_column, translated_column):
+    """Processes missing translations in batches asynchronously."""
+    tqdm_bar = tqdm_asyncio(total=df.shape[0], desc="Translating speeches", unit="rows")
 
     # Find indices where translation is missing (NaN)
     missing_indices = df[df[translated_column].isna()].index.tolist()
     
     if not missing_indices:
         print("No missing translations. Skipping translation process.")
-        return df[translated_column]  # Return the same column unchanged
+        return df[translated_column]  # Return unchanged
 
     results = df[translated_column].copy()  # Keep existing translations
+    tasks = []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_index = {executor.submit(translate, df.loc[idx, text_column], get_new_proxy()): idx for idx in missing_indices}
+    # Process in batches
+    for i in range(0, len(missing_indices), BATCH_SIZE):
+        batch_indices = missing_indices[i:i + BATCH_SIZE]
+        batch_texts = df.loc[batch_indices, text_column].tolist()
+        proxy = get_new_proxy()  # Get a fresh proxy for each batch
 
-        for future in tqdm(as_completed(future_to_index), total=len(future_to_index), desc="Processing translations"):
-            idx = future_to_index[future]
-            try:
-                results[idx] = future.result()
-            except Exception as e:
-                logging.error(f"Error in parallel translation: {e}")
-                results[idx] = ""
+        tasks.append(async_translate_bulk(batch_texts, proxy))
 
+    batch_results = await asyncio.gather(*tasks)  # Run all translation tasks
+
+    # Update results in DataFrame
+    for batch, batch_indices in zip(batch_results, missing_indices):
+        for idx, translation in zip(batch_indices, batch):
+            results[idx] = translation
+            tqdm_bar.update(1)  # Update progress bar
+
+    tqdm_bar.close()
     return results
 
-if __name__ == "__main__":
+async def process_all_files():
     root_dir = "data/speeches2014-2024"
+    tasks = []
 
     for filename in os.listdir(root_dir):
         file_path = os.path.join(root_dir, filename)
-        logging.DEBUG(f"run file {filename}")
 
         try:
             df = pd.read_csv(file_path)
@@ -127,10 +137,13 @@ if __name__ == "__main__":
                 df['speech_text_google_translate'] = np.nan  # Initialize column if missing
 
             # Only translate NaN values
-            df['speech_text_google_translate'] = translate_dataframe_parallel(df, 'speech_text', 'speech_text_google_translate')
+            df['speech_text_google_translate'] = await process_dataframe_async(df, 'speech_text', 'speech_text_google_translate')
 
             df.to_csv(file_path, index=False)
             print(f"Processed and saved: {filename}")
 
         except Exception as e:
             logging.error(f"Error processing file {filename}: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(process_all_files())  # Run entire process asynchronously
