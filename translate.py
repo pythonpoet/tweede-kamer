@@ -10,9 +10,6 @@ from tqdm.asyncio import tqdm_asyncio
 from deep_translator import GoogleTranslator
 from urllib.parse import urlparse
 
-# proxyfiy api = 8oEq6EJrQZzGKgMEQTzfaMNc4hgMLaXd6EqNRi5eXGmA
-# https://proxifly.dev/
-
 
 # Proxy List URL (Replace with actual proxy list URL)
 PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
@@ -114,8 +111,10 @@ async def async_translate_bulk(text_list, proxy=None):
 
 
 
+# ... [Keep all previous imports and setup code unchanged] ...
+
 async def process_dataframe_async(df, text_column, translated_column):
-    """Processes missing translations in batches asynchronously."""
+    """Processes missing translations in batches asynchronously with real-time progress updates."""
     missing_indices = df[df[translated_column].isna()].index.tolist()
     if not missing_indices:
         logging.info("No missing translations, skipping translation process.")
@@ -123,25 +122,37 @@ async def process_dataframe_async(df, text_column, translated_column):
 
     results = df[translated_column].copy()
     
-    tqdm_bar = tqdm_asyncio(total=len(missing_indices), desc="Translating speeches", unit="rows")
+    async def batch_translation_wrapper(start_idx, batch_texts, proxy):
+        """Wrapper to associate batch results with their start index."""
+        translations = await async_translate_bulk(batch_texts, proxy)
+        return start_idx, translations
 
+    # Create translation tasks for all batches
     tasks = []
-    for i in range(0, len(missing_indices), BATCH_SIZE):
-        batch_indices = missing_indices[i : i + BATCH_SIZE]
+    for batch_start in range(0, len(missing_indices), BATCH_SIZE):
+        batch_end = batch_start + BATCH_SIZE
+        batch_indices = missing_indices[batch_start:batch_end]
         batch_texts = df.loc[batch_indices, text_column].tolist()
         proxy = get_proxy()
+        tasks.append(
+            asyncio.create_task(
+                batch_translation_wrapper(batch_start, batch_texts, proxy)
+            )
+        )
 
-        logging.info(f"Processing batch {i // BATCH_SIZE + 1}: {len(batch_texts)} texts with proxy {proxy}")
-        tasks.append(async_translate_bulk(batch_texts, proxy))
-
-    batch_results = await asyncio.gather(*tasks)
-
-    for batch, batch_indices in zip(batch_results, range(0, len(missing_indices), BATCH_SIZE)):
-        for idx, translation in zip(missing_indices[batch_indices : batch_indices + BATCH_SIZE], batch):
-            results[idx] = translation
-            tqdm_bar.update(1)  # Update progress bar
-
-    tqdm_bar.close()  # Close progress bar properly
+    # Process results as they complete with progress tracking
+    with tqdm_asyncio.tqdm(
+        total=len(missing_indices), 
+        desc="Translating speeches", 
+        unit="rows"
+    ) as progress_bar:
+        for future in asyncio.as_completed(tasks):
+            batch_start, translations = await future
+            # Update results and progress bar
+            for batch_offset, translation in enumerate(translations):
+                results_idx = missing_indices[batch_start + batch_offset]
+                results[results_idx] = translation
+            progress_bar.update(len(translations))
 
     return results
 
