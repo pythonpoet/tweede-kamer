@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 # Proxy List URL (Replace with actual proxy list URL)
 #PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
-PROXY_LIST_URL = "https://freeproxydb.com/api/proxy/search?country=&protocol=socks5&anonymity=&speed=0,60&https=0&page_index=1&page_size=10"
+PROXY_LIST_URL = "https://freeproxydb.com/api/proxy/search?country=&protocol=socks5&anonymity=&speed=0,60&https=0&page_index=1&page_size=100"
 
 # Logging setup
 logging.basicConfig(
@@ -155,7 +155,7 @@ async def process_all_files():
         try:
             logging.info(f"Processing file: {filename}")
             df = pd.read_csv(file_path)
-            df = df.head(300)
+            df = df.head(100)
 
             if "speech_text" not in df.columns:
                 logging.error(f"Missing 'speech_text' column in {filename}")
