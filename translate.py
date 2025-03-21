@@ -197,7 +197,7 @@ async def process_all_files():
         try:
             logging.info(f"Processing file: {filename}")
             df = pd.read_csv(file_path)
-            df = df.head(100)
+
 
             if "speech_text" not in df.columns:
                 logging.error(f"Missing 'speech_text' column in {filename}")
@@ -215,7 +215,7 @@ async def process_all_files():
                 print("Assignment worked correctly.")
             else:
                 print("Something went wrong with the assignment.")
-            results.to_csv("small_sample.csv", index=False)
+            df.to_csv("small_sample.csv", index=False)
             logging.info(f"Successfully processed and saved: {filename}")
 
         except Exception as e:
