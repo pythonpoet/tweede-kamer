@@ -10,7 +10,7 @@ from tqdm.asyncio import tqdm_asyncio
 from deep_translator import GoogleTranslator
 import json
 from urllib.parse import urlparse
-from fake_useragent import UserAgent
+#from fake_useragent import UserAgent
 import random
 
 # Use these domains randomly
@@ -105,11 +105,11 @@ async def async_translate_bulk(text_list):
             target="en",
             proxies={"http": proxy, "https": proxy},
             # Add browser-like headers
-            headers={
-                "User-Agent": UserAgent().random,
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://translate.google.com/"
-            },
+            # headers={
+            #     "User-Agent": UserAgent().random,
+            #     "Accept-Language": "en-US,en;q=0.9",
+            #     "Referer": "https://translate.google.com/"
+            # },
             service_url=selected_domain
         )
 
