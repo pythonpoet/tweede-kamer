@@ -55,7 +55,7 @@ def fetch_proxies():
     global proxies
     try:
         logging.info("Fetching new proxies...")
-        response = requests.get(PROXY_LIST_URL, timeout=10, proxies= {"http": "socks5://64.202.184.249:23616", "https": "socks5://64.202.184.249:23616"})
+        response = requests.get(PROXY_LIST_URL, timeout=10, proxies= {"http": "socks5://192.95.33.162:37594", "https": "socks5://192.95.33.162:37594"})
         response.raise_for_status()
         proxies = [
             entry["connect_string"].strip()
