@@ -8,12 +8,13 @@ import numpy as np
 import os
 from tqdm.asyncio import tqdm_asyncio
 from deep_translator import GoogleTranslator
+import json
 from urllib.parse import urlparse
 
 
 # Proxy List URL (Replace with actual proxy list URL)
-PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
-
+#PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
+PROXY_LIST_URL = "https://freeproxydb.com/api/proxy/search?country=&protocol=socks5&anonymity=&speed=0,60&https=0&page_index=1&page_size=10"
 
 # Logging setup
 logging.basicConfig(
@@ -42,8 +43,11 @@ def fetch_proxies():
         logging.info("Fetching new proxies...")
         response = requests.get(PROXY_LIST_URL, timeout=10)
         response.raise_for_status()
-        proxies = list(set(response.text.split("\n")))  # Unique list
-        proxies = [p.strip() for p in proxies if p.strip()]
+        proxies = [
+            entry["connect_string"].strip()
+            for entry in response.json()["data"]["data"]
+            if "connect_string" in entry
+        ]
         logging.info(f"Fetched {len(proxies)} proxies.")
     except requests.RequestException as e:
         logging.error(f"Failed to fetch proxies: {e}")
@@ -55,14 +59,13 @@ def get_proxy():
     global current_proxy_index, proxies
     if not proxies:
         fetch_proxies()
-    
+
     if proxies:
         proxy = proxies[current_proxy_index % len(proxies)]
         current_proxy_index += 1  # Move to the next proxy in the list
         logging.info(f"Using proxy: {proxy}")
-        parsed_url = urlparse(proxy)
 
-        return parsed_url.hostname
+        return proxy
     else:
         logging.warning("No proxies available, using direct connection.")
         return None
@@ -78,16 +81,16 @@ async def async_translate_bulk(text_list, proxy=None):
         try:
             logging.info(f"Translating batch with proxy: {proxy} (Attempt {retries+1})")
             translator = GoogleTranslator(
-                source="auto", target="en", proxies={"http": proxy}
+                source="auto", target="en", proxies={"http": proxy, "https": proxy}
             )
 
             start_time = time.time()
-            
+
             # Run synchronous translation in a separate thread
             translations = await asyncio.gather(
                 *(asyncio.to_thread(translator.translate, text) for text in text_list)
             )
-            
+
             end_time = time.time()
             logging.info(f"Translated {len(text_list)} texts in {end_time - start_time:.2f} seconds.")
 
@@ -117,7 +120,7 @@ async def process_dataframe_async(df, text_column, translated_column):
         return df[translated_column]
 
     results = df[translated_column].copy()
-    
+
     # Create progress bar outside the processing loop
     pbar = tqdm_asyncio(total=len(missing_indices), desc="Translating speeches", unit="rows")
 
@@ -126,7 +129,7 @@ async def process_dataframe_async(df, text_column, translated_column):
         batch_indices = missing_indices[batch_start:batch_end]
         batch_texts = df.loc[batch_indices, text_column].tolist()
         proxy = get_proxy()
-        
+
         translations = await async_translate_bulk(batch_texts, proxy)
         return batch_start, translations
 
