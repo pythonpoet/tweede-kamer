@@ -8,6 +8,7 @@ pkgs.mkShell {
     pkgs.python3Packages.deep-translator
     pkgs.python3Packages.tqdm
     pkgs.python3Packages.nltk
+    pkgs.python3Packages.pysocks
     pkgs.gcc
     pkgs.zlib
     # Include any other dependencies you might need
