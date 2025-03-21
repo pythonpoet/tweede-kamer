@@ -173,7 +173,7 @@ async def process_all_files():
                 print("Assignment worked correctly.")
             else:
                 print("Something went wrong with the assignment.")
-            df.to_csv("small_sample.csv", index=False)
+            results.to_csv("small_sample.csv", index=False)
             logging.info(f"Successfully processed and saved: {filename}")
 
         except Exception as e:
