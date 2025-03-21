@@ -10,11 +10,25 @@ from tqdm.asyncio import tqdm_asyncio
 from deep_translator import GoogleTranslator
 import json
 from urllib.parse import urlparse
+from fake_useragent import UserAgent
+import random
+
+# Use these domains randomly
+TRANSLATE_DOMAINS = [
+    "translate.google.com",  # Default
+    "translate.google.co.uk",
+    "translate.google.de",
+    "translate.google.fr",
+    "translate.google.es",
+    "translate.google.ru",
+    "translate.google.cn",
+    "translate.google.jp"
+]
 
 
 # Proxy List URL (Replace with actual proxy list URL)
 #PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
-PROXY_LIST_URL = "https://freeproxydb.com/api/proxy/search?country=&protocol=socks5&anonymity=&speed=0,60&https=0&page_index=1&page_size=100"
+PROXY_LIST_URL = "https://freeproxydb.com/api/proxy/search?country=&protocol=socks5&anonymity=&speed=0,60&https=0&page_index=1&page_size=200"
 
 # Logging setup
 logging.basicConfig(
@@ -69,48 +83,76 @@ def get_proxy():
     else:
         logging.warning("No proxies available, using direct connection.")
         return None
+def blacklist_proxy(proxy):
+    """Temporarily remove bad proxies from rotation"""
+    global proxies
+    proxies = [p for p in proxies if p != proxy]
 
+async def async_translate_bulk(text_list):
+    """Enhanced translation function with multiple anti-ban features"""
+    results = [""] * len(text_list)
+    remaining = list(enumerate(text_list))
+    # Randomly select a domain for each attempt
+    selected_domain = random.choice(TRANSLATE_DOMAINS)
 
-async def async_translate_bulk(text_list, proxy=None):
-    """Translates a list of texts using GoogleTranslator in bulk with retries."""
-    if not text_list:
-        return []
+    for attempt in range(MAX_RETRIES):
+        if not remaining:
+            break
 
-    retries = 0
-    while retries < MAX_RETRIES:
+        proxy = get_proxy()
+        translator = GoogleTranslator(
+            source="auto",
+            target="en",
+            proxies={"http": proxy, "https": proxy},
+            # Add browser-like headers
+            headers={
+                "User-Agent": UserAgent().random,
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://translate.google.com/"
+            },
+            service_url=selected_domain
+        )
+
         try:
-            logging.info(f"Translating batch with proxy: {proxy} (Attempt {retries+1})")
-            translator = GoogleTranslator(
-                source="auto", target="en", proxies={"http": proxy, "https": proxy}
-            )
+            # Randomize request timing
+            jitter = random.uniform(0.5, 1.5)
+            await asyncio.sleep(REQUEST_DELAY * jitter)
 
-            start_time = time.time()
+            # Split batch to smaller chunks
+            chunk_size = random.randint(3, 5)
+            for i in range(0, len(remaining), chunk_size):
+                chunk = remaining[i:i+chunk_size]
+                texts = [t[1] for t in chunk]
 
-            # Run synchronous translation in a separate thread
-            translations = await asyncio.gather(
-                *(asyncio.to_thread(translator.translate, text) for text in text_list)
-            )
+                translations = await asyncio.gather(
+                    *(asyncio.to_thread(translator.translate, text)
+                    for text in texts),
+                    return_exceptions=True
+                )
 
-            end_time = time.time()
-            logging.info(f"Translated {len(text_list)} texts in {end_time - start_time:.2f} seconds.")
+                # Process results
+                new_remaining = []
+                for (idx, orig), translation in zip(chunk, translations):
+                    if isinstance(translation, Exception):
+                        new_remaining.append((idx, orig))
+                    elif translation.strip():
+                        results[idx] = translation
+                    else:
+                        new_remaining.append((idx, orig))
 
-            return translations
+                remaining = new_remaining
+                if not remaining:
+                    break
+
+                # Random delay between chunks
+                await asyncio.sleep(random.uniform(1, 3))
+
         except Exception as e:
-            error_message = str(e)
-            logging.warning(f"Translation failed with proxy {proxy}: {error_message}")
+            logging.error(f"Proxy {proxy} failed: {str(e)}")
+            blacklist_proxy(proxy)
+            continue
 
-            # Rate limit handling
-            if "too many requests" in error_message.lower():
-                wait_time = (2 ** retries) * REQUEST_DELAY  # Exponential backoff
-                logging.warning(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
-                await asyncio.sleep(wait_time)
-            else:
-                proxy = get_proxy()  # Switch to a new proxy
-
-            retries += 1
-
-    logging.error("Failed to translate after multiple retries.")
-    return [""] * len(text_list)  # Return empty translations for failed attempts
+    return results
 
 async def process_dataframe_async(df, text_column, translated_column):
     """Processes missing translations in batches asynchronously."""
