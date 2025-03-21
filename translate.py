@@ -149,13 +149,13 @@ async def process_all_files():
     """Processes all speech files asynchronously."""
     root_dir = "data/speeches2014-2024"
 
-    for filename in ["speeches_2014-2015.csv"]:#os.listdir(root_dir):
+    for filename in ["speeches_2015-2016.csv"]:#os.listdir(root_dir):
         file_path = os.path.join(root_dir, filename)
 
         try:
             logging.info(f"Processing file: {filename}")
             df = pd.read_csv(file_path)
-            df = df.head(4600)
+            df = df.head(300)
 
             if "speech_text" not in df.columns:
                 logging.error(f"Missing 'speech_text' column in {filename}")
