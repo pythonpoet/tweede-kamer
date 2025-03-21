@@ -149,7 +149,7 @@ async def process_all_files():
     """Processes all speech files asynchronously."""
     root_dir = "data/speeches2014-2024"
 
-    for filename in ["speeches_2014-2015.csv"]#os.listdir(root_dir):
+    for filename in ["speeches_2014-2015.csv"]:#os.listdir(root_dir):
         file_path = os.path.join(root_dir, filename)
 
         try:
