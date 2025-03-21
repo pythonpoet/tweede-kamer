@@ -167,8 +167,8 @@ async def process_all_files():
             results = await process_dataframe_async(
                 df, "speech_text", "speech_text_google_translate"
             )
-
-            results.to_csv("small_sample.csv", index=False)
+            df["speech_text_google_translate"] = results
+            df.to_csv("small_sample.csv", index=False)
             logging.info(f"Successfully processed and saved: {filename}")
 
         except Exception as e:
