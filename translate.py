@@ -155,7 +155,7 @@ async def process_all_files():
         try:
             logging.info(f"Processing file: {filename}")
             df = pd.read_csv(file_path)
-            df = df.head(10000)
+            df = df.head(4600)
 
             if "speech_text" not in df.columns:
                 logging.error(f"Missing 'speech_text' column in {filename}")
@@ -164,11 +164,11 @@ async def process_all_files():
             if "speech_text_google_translate" not in df.columns:
                 df["speech_text_google_translate"] = np.nan
 
-            df["speech_text_google_translate"] = await process_dataframe_async(
+            results = await process_dataframe_async(
                 df, "speech_text", "speech_text_google_translate"
             )
 
-            df.to_csv("small_sample.csv", index=False)
+            results.to_csv("small_sample.csv", index=False)
             logging.info(f"Successfully processed and saved: {filename}")
 
         except Exception as e:
