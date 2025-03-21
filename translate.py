@@ -28,7 +28,7 @@ TRANSLATE_DOMAINS = [
 
 # Proxy List URL (Replace with actual proxy list URL)
 #PROXY_LIST_URL = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
-PROXY_LIST_URL = "https://freeproxydb.com/api/proxy/search?country=&protocol=socks5&anonymity=&speed=0,60&https=0&page_index=1&page_size=200"
+PROXY_LIST_URL = "https://freeproxydb.com/api/proxy/search?country=&protocol=socks5&anonymity=&speed=0,60&https=0&page_index=1&page_size=100"
 
 # Logging setup
 logging.basicConfig(
@@ -55,7 +55,7 @@ def fetch_proxies():
     global proxies
     try:
         logging.info("Fetching new proxies...")
-        response = requests.get(PROXY_LIST_URL, timeout=10, proxies= {"http": "socks5://192.95.33.162:37594", "https": "socks5://192.95.33.162:37594"})
+        response = requests.get(PROXY_LIST_URL, timeout=10)
         response.raise_for_status()
         proxies = [
             entry["connect_string"].strip()
