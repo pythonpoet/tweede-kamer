@@ -167,7 +167,12 @@ async def process_all_files():
             results = await process_dataframe_async(
                 df, "speech_text", "speech_text_google_translate"
             )
-            df["speech_text_google_translate"] = results
+            df["speech_text_google_translate"] = results.copy()
+            # veryfy
+            if df["speech_text_google_translate"].equals(results):
+                print("Assignment worked correctly.")
+            else:
+                print("Something went wrong with the assignment.")
             df.to_csv("small_sample.csv", index=False)
             logging.info(f"Successfully processed and saved: {filename}")
 
