@@ -170,9 +170,9 @@ async def process_dataframe_async(df, text_column, translated_column):
         batch_end = batch_start + BATCH_SIZE
         batch_indices = missing_indices[batch_start:batch_end]
         batch_texts = df.loc[batch_indices, text_column].tolist()
-        proxy = get_proxy()
 
-        translations = await async_translate_bulk(batch_texts, proxy)
+
+        translations = await async_translate_bulk(batch_texts)
         return batch_start, translations
 
     tasks = [process_batch(i) for i in range(0, len(missing_indices), BATCH_SIZE)]
