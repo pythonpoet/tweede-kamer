@@ -5,10 +5,31 @@ description = ""
 authors = ["David Wild <david_wild@gmx.ch>"]
 readme = "README.md"
 
+[tool.uv]
+name = "tweede-kamer"
+version = "0.1.0"
+description = ""
+authors = ["David Wild <david_wild@gmx.ch>"]
+readme = "README.md"
+
 [tool.poetry.dependencies]
 python = "^3.12"
 pandas = "^2.2.3"
 jupyter = "^1.1.1"
+mistralai = "^1.5.1"
+datauri = "^1.0.0"
+modal = "^0.73.108"
+deep-translator = "^1.11.4"
+pysocks = "^1.7.1"
+
+
+[tool.uv.dependencies]
+python = "^3.12"
+pandas = "^2.2.3"
+jupyter = "^1.1.1"
+mistralai = "^1.5.1"
+datauri = "^1.0.0"
+modal = "^0.73.108"
 
 
 [build-system]
