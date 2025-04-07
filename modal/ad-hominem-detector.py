@@ -81,12 +81,15 @@ download_image = (
     .env({"LD_LIBRARY_PATH":"/app/:$LD_LIBRARY_PATH"})
     # Add files
     .add_local_file("sample_data_english.csv", remote_path="/root/sample_data_english.csv")
-    .add_local_file("promt.py", remote_path="/root/promt.py")   
+    .add_local_file("sample_data_dutch.csv", remote_path="/root/sample_data_dutch.csv")
+    .add_local_file("promt_en.py", remote_path="/root/promt_en.py")
+    .add_local_file("promt_nl.py", remote_path="/root/promt_nl.py")
 )
 
 
+from promt_en import prompt as PROMPT_TEMPLATE_EN
+from promt_nl import prompt as PROMPT_TEMPLATE_NL
 
-from promt import prompt as PROMPT_TEMPLATE
 
 gguf_path = None
 
@@ -97,7 +100,7 @@ cache_dir = "/root/.cache/llama.cpp"
 )
 def download_model(repo_id: str, revision=None, quant: str = "Q4_K_M"):
     global gguf_path
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import snapshot_download   
     import shutil
 
     print("📦 Downloading model from:", repo_id)
@@ -119,24 +122,17 @@ def download_model(repo_id: str, revision=None, quant: str = "Q4_K_M"):
 
 
 # -------------------- RUN LLAMA.CPP -------------------- #
-cache_dir = "/root/.cache/llama.cpp"
-@app.function(
-    image=download_image, 
-    timeout=60 * 15, 
-    volumes={results_dir: results, cache_dir: model_cache}, 
-    gpu=GPU_CONFIG)
-def llama_cpp_inference(gguf_path: str, prompt: str, n_predict: int = -1,DEBUG=False):
-    from llama_cpp import Llama
 
- 
-    print("🧠 Running inference with GGUF:", gguf_path)
+def llama_cpp_inference(llm, gguf_path: str, prompt: str, n_predict: int = -1,DEBUG=False):
+    
+
     # set layers to "off-load to", aka run on, GPU
     if GPU_CONFIG is not None:
         n_gpu_layers = 9999  # all
     else:
         n_gpu_layers = 0
-    # Initialising model
-    llm = Llama(model_path=gguf_path, n_gpu_layers=-1, n_ctx=2048, verbose=DEBUG)
+
+    
     response = llm.create_chat_completion(
         messages=[
             {"role": "user", "content": str(prompt)},
@@ -170,6 +166,27 @@ def gpu_function():
     print("Torch version:", torch.__version__)
     print("CUDA available:", torch.cuda.is_available())
     print("CUDA device count:", torch.cuda.device_count())
+
+
+def get_gpu_power():
+    import subprocess
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=power.draw", "--format=csv,noheader,nounits"],
+        capture_output=True,
+        text=True
+    )
+    try:
+        return float(result.stdout.strip())
+    except:
+        return 0.0
+power_samples = []
+
+def monitor_power(interval=0.5):
+    import time
+    while True:
+        power = get_gpu_power()
+        power_samples.append(power)
+        time.sleep(interval)
 # -------------------- EVALUATE -------------------- #
 cache_dir = "/root/.cache/llama.cpp"
 @app.function(
@@ -180,58 +197,52 @@ cache_dir = "/root/.cache/llama.cpp"
         cache_dir: model_cache
         },
     gpu=GPU_CONFIG)
-def run_pipeline():
-    global gguf_path
+def run_pipeline(repo_id, df, prompt, out_path, DEBUG=False):
     import pandas as pd
-    from transformers import LlamaTokenizer
-    gpu_function.remote()
-  
-    repo_id = "unsloth/DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit"
-    repo_id = "TheBloke/deepseek-llm-7B-chat-GGUF"
+    import time
+    import threading
+    from llama_cpp import Llama
+
+    monitor = threading.Thread(target=monitor_power, daemon=True)
+    monitor.start()
+    start_time = time.time()
     print("🚀 Starting pipeline...")
     gguf_path = download_model.remote(repo_id)
+
     print("✅ Model downloaded to:", gguf_path)
 
-    df = pd.read_csv("sample_data_english.csv")
-    print("📊 Loaded data:", df.shape)
-
-    # Initialising tokenizier
-    import os
-    print("🔍 GGUF file exists?", os.path.exists(gguf_path))
-
-    tokenizer = LlamaTokenizer.from_pretrained("openlm-research/open_llama_7b")
+    # Initialise llm
+    llm = Llama(model_path=gguf_path, n_gpu_layers=-1, n_ctx=4096, verbose=DEBUG)
+    df = df.head(5)
 
     predictions = []
     correct = 0
-    df = df.head(1)
     for idx, row in df.iterrows():
         true_label = row["Label"].strip()
         speech = row["Speech"].strip()
 
         print(f"\n🔎 Row {idx}: Label={true_label}")
-        full_prompt = PROMPT_TEMPLATE.format(text=speech)
-        #print("📝 Prompt preview:", full_prompt[:200])
 
-        result = llama_cpp_inference.remote(gguf_path, full_prompt)
+        full_prompt = prompt.format(text=speech)
+
+
+        result = llama_cpp_inference(llm, gguf_path, full_prompt)
         #print("🧾 Raw model output:", result[:300])
 
         # #Calculate tokens
-        # input_tokens = tokenizer.encode(full_prompt.encode("utf-8"))
-        # input_token_count = len(input_tokens)
+        input_tokens = llm.tokenize(full_prompt.encode("utf-8"))
+        input_token_count = len(input_tokens)
 
-        # output_tokens = tokenizer.encode(result.encode("utf-8"))
-        # output_token_count = len(output_tokens)
+        output_tokens = llm.tokenize(result.encode("utf-8"))
+        output_token_count = len(output_tokens)
 
-        # energy = (input_token_count + output_token_count) / 1000 * GPU_INFO[GPU_CONFIG]["energy"]
+        energy = (input_token_count + output_token_count) / 1000 * GPU_INFO[GPU_CONFIG]["energy"]
 
         # print(f"Estimated energy used: {energy:.4f} kWh")
-        energy = None
+
 
         try:
             parsed = clean_result(result)
-            print(parsed)
-            print(parsed["summary"]["count"])
-            print(parsed["summary"]["count"] > 0)
             predicted_label = "Ad Hominem" if parsed["summary"]["count"] > 0 else "No Ad Hominem"
         except Exception as e:
             print(f"❌ Error parsing result at row {idx}: {e}")
@@ -246,13 +257,70 @@ def run_pipeline():
             "True Label": true_label,
             "Predicted Label": predicted_label,
             "Correct": is_correct,
-            "Compute Energy": energy
+            "Compute Energy": energy,
+            "raw_output": parsed
         })
 
     accuracy = correct / len(df)
     print(f"🎯 Accuracy: {accuracy:.2%}")
 
-    out_path = os.path.join(results_dir, "predictions.csv")
+    out_path = os.path.join(results_dir, out_path)
     pd.DataFrame(predictions).to_csv(out_path, index=False)
     print("📁 Results saved to:", out_path)
-    return accuracy
+
+    duration = time.time() - start_time
+    avg_power = sum(power_samples) / len(power_samples)
+    energy_measured = avg_power * duration 
+    print(f"⚡ Average power during inference (by nvidia-smi): {avg_power:.2f} W")
+    print(f"⏱️ Duration: {duration:.2f} s")
+
+    # Assuming predictions is your list of dicts
+    df = pd.DataFrame(predictions)
+    # Sum the 'Compute Energy' column
+    total_energy = df["Compute Energy"].sum()
+    energy_token = total_energy / duration
+
+    print(f"🔋 Compute Energy by tokenizer: { energy_token} W")
+    return accuracy, energy_measured, energy_token, duration
+@app.function(
+    image=download_image,
+    timeout=60 * 60 * 3,  # 3 hour
+    volumes={results_dir: results, cache_dir: model_cache},
+
+)
+def run_all_evaluations():
+    import pandas as pd
+    from promt_en import prompt as PROMPT_TEMPLATE_EN
+    from promt_nl import prompt as PROMPT_TEMPLATE_NL
+
+    repo_id = "TheBloke/deepseek-llm-7B-chat-GGUF"
+    df = pd.read_csv("sample_data_english.csv")
+    df_nl = pd.read_csv("sample_data_dutch.csv")
+
+    accuracy_en_depseek, energy_en_depseek, tokens_en_depseek, duration_en_depseek = run_pipeline.remote(
+        repo_id, df, PROMPT_TEMPLATE_EN, "predictions_english_english_deepseek7b.csv"
+    )
+    accuracy_nl_deepseek, energy_nl_deepseek, tokens_nl_deepseek, duration_nl_deepseek = run_pipeline.remote(
+        repo_id, df_nl, PROMPT_TEMPLATE_NL, "predictions_dutch_dutch_deepseek7b.csv"
+    )
+
+    repo_id = "BramVanroy/GEITje-7B-ultra-GGUF"
+    accuracy_nl_geitje, energy_nl_geitje, tokens_nl_geitje, duration_nl_geitje = run_pipeline.remote(
+        repo_id, df_nl, PROMPT_TEMPLATE_NL, "predictions_dutch_dutch_geitje.csv"
+    )
+    accuracy_en_geitje, energy_en_geitje, tokens_en_geitje, duration_en_geitje = run_pipeline.remote(
+        repo_id, df, PROMPT_TEMPLATE_EN, "predictions_english_english_geitje.csv"
+    )
+
+    print(f"EN-EN DeepSeek ➤ Accuracy: {accuracy_en_depseek:.2f}, Energy: {energy_en_depseek} J, Tokens: {tokens_en_depseek}, Duration: {duration_en_depseek:.2f}s")
+    print(f"NL-NL DeepSeek ➤ Accuracy: {accuracy_nl_deepseek:.2f}, Energy: {energy_nl_deepseek} J, Tokens: {tokens_nl_deepseek}, Duration: {duration_nl_deepseek:.2f}s")
+    print(f"EN-EN GEITje     ➤ Accuracy: {accuracy_en_geitje:.2f}, Energy: {energy_en_geitje} J, Tokens: {tokens_en_geitje}, Duration: {duration_en_geitje:.2f}s")
+    print(f"NL-NL GEITje     ➤ Accuracy: {accuracy_nl_geitje:.2f}, Energy: {energy_nl_geitje} J, Tokens: {tokens_nl_geitje}, Duration: {duration_nl_geitje:.2f}s")
+
+@app.local_entrypoint()
+def main():
+    print("📤 Submitting cloud job...")
+    run_all_evaluations.remote()
+    print("✅ Job submitted! You can now close your laptop.")
+
+
