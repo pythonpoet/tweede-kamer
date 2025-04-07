@@ -215,19 +215,21 @@ def run_pipeline(repo_id, df, prompt, out_path, DEBUG=False):
     llm = Llama(model_path=gguf_path, n_gpu_layers=-1, n_ctx=4096, verbose=DEBUG)
     df = df.head(5)
 
+
     predictions = []
     correct = 0
     for idx, row in df.iterrows():
+        _prompt = prompt
         true_label = row["Label"].strip()
         speech = row["Speech"].strip()
 
         print(f"\n🔎 Row {idx}: Label={true_label}")
 
-        full_prompt = prompt.format(text=speech)
 
-
+        full_prompt = _prompt.format(text=speech)
+        print("full promt:", full_prompt)
         result = llama_cpp_inference(llm, gguf_path, full_prompt)
-        #print("🧾 Raw model output:", result[:300])
+        print("🧾 Raw model output:", result)
 
         # #Calculate tokens
         input_tokens = llm.tokenize(full_prompt.encode("utf-8"))
@@ -246,7 +248,10 @@ def run_pipeline(repo_id, df, prompt, out_path, DEBUG=False):
             predicted_label = "Ad Hominem" if parsed["summary"]["count"] > 0 else "No Ad Hominem"
         except Exception as e:
             print(f"❌ Error parsing result at row {idx}: {e}")
+            print("result: ", result)
             predicted_label = "Unknown"
+            parsed = result
+            
 
         is_correct = predicted_label == true_label
         correct += int(is_correct)
