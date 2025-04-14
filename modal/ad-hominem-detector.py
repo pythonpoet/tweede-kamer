@@ -4,45 +4,17 @@ import glob
 import csv
 import json
 from pathlib import Path
+from hardware import GPU_INFO
+from promt_en import prompt as PROMPT_TEMPLATE_EN
+from promt_nl import prompt as PROMPT_TEMPLATE_NL
 
+# Specify name of program
 app = modal.App("ad-hominem-detector")
-
+# Specify GPU Used
 GPU_CONFIG = "L4"  # or "A10G", etc.
+TIME_ZONE = "Europe/Amsterdam"
 
-# Chat-gpt estimates
-# energy is kwh/
-GPU_INFO = {
-    "T4": {
-        "energy": 0.012,
-        "nvidia_driver": "sm_75",
-    },
-    "L4": {
-        "energy": 0.009,
-        "nvidia_driver": "sm_89",
-    },
-    "A10G": {
-        "energy": 0.020,
-        "nvidia_driver": "sm_86",
-    },
-    "A100-40GB": {
-        "energy": 0.035,
-        "nvidia_driver": "sm_80",
-    },
-    "A100-80GB": {
-        "energy": 0.040,
-        "nvidia_driver": "sm_80",
-    },
-    "L40S": {
-        "energy": 0.030,
-        "nvidia_driver": "sm_89",
-    },
-    "H100": {
-        "energy": 0.050,
-        "nvidia_driver": "sm_90",
-    },
-}
-arch = GPU_INFO[GPU_CONFIG]["nvidia_driver"]
-
+# Initialise volumes
 model_cache = modal.Volume.from_name("llamacpp-cache", create_if_missing=True)
 cache_dir = "/root/.cache/llama.cpp"
 
@@ -50,17 +22,12 @@ results = modal.Volume.from_name("llamacpp-results", create_if_missing=True)
 results_dir = "/root/results"
 
 # -------------------- IMAGE -------------------- #
-
-
-LLAMA_CPP_RELEASE = "b4568"
-MINUTES = 60
-
-cuda_version = "12.4.0"  # should be no greater than host CUDA version
-flavor = "cudnn-devel"  #  includes full CUDA toolkit
-operating_sys = "ubuntu22.04"
-tag = f"{cuda_version}-{flavor}"#-{operating_sys}"
-
-
+# Nvidia image is being downloaded with build chain to complile llama-cpp-python
+# llama.cpp would also work but the python interface has better predefined configs.
+# Notably, llama.cpp had the issue of not finding the stop-token.
+# It was in an infinite loop of talking with itself. The issue was ofcourse,
+# that the prompt template was not automatically resolved, llama-cpp-python, however, could automatically
+# resolve that.
 download_image = (
     modal.Image.from_registry(f"nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04", add_python="3.12")
     .apt_install(
@@ -74,37 +41,39 @@ download_image = (
         "CMAKE_ARGS='-DGGML_CUDA=on' pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121"
     ])
     # Install other deps
-    .pip_install("torch", "pandas", "numpy", "huggingface_hub[hf_transfer]==0.26.2", "transformers", "sentencepiece" )
-    
-    
+    .pip_install("torch","pandas", "numpy", "huggingface_hub[hf_transfer]==0.26.2",
+        "transformers", "sentencepiece", "scikit-learn", "seaborn", "matplotlib", "fpdf2" )
+
     .entrypoint([])
-    .env({"LD_LIBRARY_PATH":"/app/:$LD_LIBRARY_PATH"})
+    .env({"LD_LIBRARY_PATH":"/app/:$LD_LIBRARY_PATH"},)
+    .env({"HUGGINGFACE_HUB_TOKEN":"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"})
     # Add files
+    #.add_local_dir(".", remote_path="/root/ad-hominem")
     .add_local_file("sample_data_english.csv", remote_path="/root/sample_data_english.csv")
     .add_local_file("sample_data_dutch.csv", remote_path="/root/sample_data_dutch.csv")
-    .add_local_file("promt_en.py", remote_path="/root/promt_en.py")
-    .add_local_file("promt_nl.py", remote_path="/root/promt_nl.py")
+    .add_local_file("DejaVuSans.ttf", remote_path="/root/DejaVuSans.ttf")
+    .add_local_file("DejaVuSans-Bold.ttf", remote_path="/root/DejaVuSans-Bold.ttf")
+    .add_local_python_source("promt_en", )
+    .add_local_python_source("promt_nl", )
+    .add_local_python_source("hardware")
+    .add_local_python_source("resutls_processing")
+    .add_local_python_source("progress_bar")
+    
 )
 
-
-from promt_en import prompt as PROMPT_TEMPLATE_EN
-from promt_nl import prompt as PROMPT_TEMPLATE_NL
-
-
-gguf_path = None
 
 # -------------------- DOWNLOAD MODEL -------------------- #
 cache_dir = "/root/.cache/llama.cpp"
 @app.function(
     image=download_image, volumes={cache_dir: model_cache}, timeout=60 * 10,
 )
-def download_model(repo_id: str, revision=None, quant: str = "Q4_K_M"):
+def download_model(repo_id: str, revision=None, quant: str = "Q8_0", hf_token= None):
     global gguf_path
-    from huggingface_hub import snapshot_download   
+    from huggingface_hub import snapshot_download
     import shutil
 
     print("📦 Downloading model from:", repo_id)
-    model_path = snapshot_download(repo_id, local_dir=cache_dir)
+    model_path = snapshot_download(repo_id, local_dir=cache_dir, token=hf_token)
 
 
     gguf_files = glob.glob(os.path.join(model_path, "*.gguf"))
@@ -112,63 +81,58 @@ def download_model(repo_id: str, revision=None, quant: str = "Q4_K_M"):
     print("🦙 model loaded")
 
     if gguf_files:
-        preferred = [f for f in gguf_files if quant in f]
+        preferred = [f for f in gguf_files if quant.lower() in f]
         if not preferred:
             raise FileNotFoundError(f"No GGUF file found for quant '{quant}'")
-        
+
         return preferred[0]
     else:
         raise FileNotFoundError("No GGUF file found in the downloaded model directory.")
 
-
 # -------------------- RUN LLAMA.CPP -------------------- #
 
 def llama_cpp_inference(llm, gguf_path: str, prompt: str, n_predict: int = -1,DEBUG=False):
-    
-
     # set layers to "off-load to", aka run on, GPU
     if GPU_CONFIG is not None:
         n_gpu_layers = 9999  # all
     else:
         n_gpu_layers = 0
-
-    
     response = llm.create_chat_completion(
         messages=[
             {"role": "user", "content": str(prompt)},
         ],
-        temperature=0,
+        response_format={
+        "type": "json_object"
+        },
+        #temperature=0,
     )
     return response["choices"][0]["message"]["content"]
 
 # -------------------- Helper -------------------- #
 def clean_result(text: str):
+    """
+        Multiple ways to resolve different ways a llm might return json.
+        1. normal
+        2. embedded in text but marked as specified in the template
+        3. normal json but with '' instead of ""
+    """
     import json
+    import ast
     try:
         return json.loads(text)
     except Exception as e:
-        print(f"issue during llm-output cleaning: {e}")    
-        json_start = text.find('json') + len('json')
-        json_end = text.rfind('```')
-        json_str = text[json_start:json_end].strip()
-        return json.loads(text)
-@app.function(
-    image=download_image, 
-    timeout=60 * 15, 
-    volumes={results_dir: results, cache_dir: model_cache}, 
-    gpu=GPU_CONFIG)
-def gpu_function():
-    import subprocess
-
-    import torch
-
-    subprocess.run(["nvidia-smi"])
-    print("Torch version:", torch.__version__)
-    print("CUDA available:", torch.cuda.is_available())
-    print("CUDA device count:", torch.cuda.device_count())
-
+        try:
+            json_start = text.find('json') + len('json')
+            json_end = text.rfind('```')
+            json_str = text[json_start:json_end].strip()
+            return json.loads(text)
+        except:
+            return ast.literal_eval(text)
 
 def get_gpu_power():
+    """
+        Return power usage of cuda driver
+    """
     import subprocess
     result = subprocess.run(
         ["nvidia-smi", "--query-gpu=power.draw", "--format=csv,noheader,nounits"],
@@ -179,9 +143,12 @@ def get_gpu_power():
         return float(result.stdout.strip())
     except:
         return 0.0
-power_samples = []
 
+power_samples = []
 def monitor_power(interval=0.5):
+    """
+        Monitor average power consumtion of cuda driver
+    """
     import time
     while True:
         power = get_gpu_power()
@@ -190,46 +157,44 @@ def monitor_power(interval=0.5):
 # -------------------- EVALUATE -------------------- #
 cache_dir = "/root/.cache/llama.cpp"
 @app.function(
-    image=download_image, 
-    timeout=60 * 30, 
+    image=download_image,
+    timeout=60 * 60,
     volumes={
         results_dir: results,
         cache_dir: model_cache
         },
     gpu=GPU_CONFIG)
-def run_pipeline(repo_id, df, prompt, out_path, DEBUG=False):
+def run_pipeline(repo_id, query, prompt, quant="Q8_0", hf_token=None, DEBUG=False):
+    """
+        Method to run inference on a model.
+        `repo_id` is the huggingface link to a gguf compatibale model.
+        `query` A list of texts to analyse
+        `prompt` The promt, it has to have the marker {text} where the query element will be inserted
+        `quant` Quantisation of gguf file
+        `hf_token` Api token to hugging face, for models with restriction
+    """
     import pandas as pd
     import time
     import threading
     from llama_cpp import Llama
+    from progress_bar import storming_progress_bar
 
+    print("🚀 Starting pipeline...")
     monitor = threading.Thread(target=monitor_power, daemon=True)
     monitor.start()
     start_time = time.time()
-    print("🚀 Starting pipeline...")
-    gguf_path = download_model.remote(repo_id)
-
-    print("✅ Model downloaded to:", gguf_path)
 
     # Initialise llm
+    gguf_path = download_model.remote(repo_id,quant=quant, hf_token=hf_token)
     llm = Llama(model_path=gguf_path, n_gpu_layers=-1, n_ctx=4096, verbose=DEBUG)
-    df = df.head(5)
 
-
-    predictions = []
-    correct = 0
-    for idx, row in df.iterrows():
+    inference = []
+    for idx, row in enumerate(query):
+        storming_progress_bar(idx, len(query), start_time, update_message=f'Row: {idx}')
         _prompt = prompt
-        true_label = row["Label"].strip()
-        speech = row["Speech"].strip()
+        full_prompt = _prompt.format(text=row)
 
-        print(f"\n🔎 Row {idx}: Label={true_label}")
-
-
-        full_prompt = _prompt.format(text=speech)
-        print("full promt:", full_prompt)
         result = llama_cpp_inference(llm, gguf_path, full_prompt)
-        print("🧾 Raw model output:", result)
 
         # #Calculate tokens
         input_tokens = llm.tokenize(full_prompt.encode("utf-8"))
@@ -240,92 +205,251 @@ def run_pipeline(repo_id, df, prompt, out_path, DEBUG=False):
 
         energy = (input_token_count + output_token_count) / 1000 * GPU_INFO[GPU_CONFIG]["energy"]
 
-        # print(f"Estimated energy used: {energy:.4f} kWh")
-
-
         try:
             parsed = clean_result(result)
-            predicted_label = "Ad Hominem" if parsed["summary"]["count"] > 0 else "No Ad Hominem"
         except Exception as e:
             print(f"❌ Error parsing result at row {idx}: {e}")
             print("result: ", result)
-            predicted_label = "Unknown"
             parsed = result
-            
 
-        is_correct = predicted_label == true_label
-        correct += int(is_correct)
-        print(f"sentence is labled: {true_label} and got detected as {predicted_label} which is correct? {is_correct}")
-
-        predictions.append({
-            "Speech": speech,
-            "True Label": true_label,
-            "Predicted Label": predicted_label,
-            "Correct": is_correct,
-            "Compute Energy": energy,
-            "raw_output": parsed
+        inference.append({
+            "result": parsed,
+            "energy_by_token": energy,
+            "index": idx
         })
 
-    accuracy = correct / len(df)
-    print(f"🎯 Accuracy: {accuracy:.2%}")
-
-    out_path = os.path.join(results_dir, out_path)
-    pd.DataFrame(predictions).to_csv(out_path, index=False)
-    print("📁 Results saved to:", out_path)
-
+    # Print metrix
     duration = time.time() - start_time
     avg_power = sum(power_samples) / len(power_samples)
-    energy_measured = avg_power * duration 
-    print(f"⚡ Average power during inference (by nvidia-smi): {avg_power:.2f} W")
-    print(f"⏱️ Duration: {duration:.2f} s")
+    energy_measured = avg_power * duration
 
-    # Assuming predictions is your list of dicts
-    df = pd.DataFrame(predictions)
-    # Sum the 'Compute Energy' column
-    total_energy = df["Compute Energy"].sum()
-    energy_token = total_energy / duration
+    df = pd.DataFrame(inference)
+    energy_by_token = df["energy_by_token"].sum()
+    print(f"\n⏱️ Duration: {duration:.2f} for {len(query)} querys. Average computation time: {duration/len(query)}")
+    print(f"⚡ Estimated power (by nvidia-smi): {energy_measured:.4f} W")
+    print(f"🔋 Estimated power ( by tokenizer): { energy_by_token:.4f} W")
+    print(f"🤑 Cost: {duration* GPU_INFO[GPU_CONFIG]["price_per_sec"]:.2f} 💰")
 
-    print(f"🔋 Compute Energy by tokenizer: { energy_token} W")
-    return accuracy, energy_measured, energy_token, duration
+    return inference, energy_measured, duration, power_samples
+
+def compute_results(inference, df):
+    import pandas as pd
+    from sklearn.metrics import accuracy_score
+    inference_df = pd.DataFrame(inference)
+    # assign error
+    try:
+        assert df.shape[0] == inference_df.shape[0], (
+            f"Row mismatch: df has {df.shape[0]} rows, "
+            f"inference_df has {inference_df.shape[0]} rows.\n"
+            f"inference_df head:\n{inference_df.head()}"
+        )
+        
+        df["result"] = inference_df["result"].values
+        df["energy_by_token"] = inference_df["energy_by_token"].values
+        df["index"] = inference_df["index"].values
+
+    except AssertionError as e:
+        print("Assertion failed:", e)
+        df["result"] = inference_df["result"]
+        df["energy_by_token"] = inference_df["energy_by_token"]
+        df["index"] = inference_df["index"]
+
+    
+
+    def extract_predicted_lable(result):
+        try:
+            return "Ad Hominem" if result["summary"]["count"] > 0 else "No Ad Hominem"
+        except:
+            # This means the json was not parsed correctly
+            return "Unknown"
+
+    df["predicted"] = inference_df["result"].apply(extract_predicted_lable)
+
+    len_unclassified = len(df[df["predicted"]== "Unknown"])
+    df = df[df["predicted"] != "Unknown"]
+
+    # Now make types consistent
+    df["truth_label"] = df["Label"] != "No Ad Hominem"
+    df["predicted"] = df["predicted"] != "No Ad Hominem"
+
+    accuracy = accuracy_score(df["truth_label"], df["predicted"])
+    print(f"🎯 Accuracy: {accuracy:.2%}")
+    return df, accuracy, len_unclassified
+
+def plot_confusion_matrix(df, path="confusion_matrix.png"):
+    from sklearn.metrics import confusion_matrix, accuracy_score
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    y_true = df["truth_label"]
+    y_pred = df["predicted"]
+
+    # Use boolean labels for computation
+    labels = [False, True]
+    label_names = ["No Ad Hominem", "Ad Hominem"]
+
+    # Compute accuracy
+    accuracy = accuracy_score(y_true, y_pred)
+    print(f"✅ Accuracy: {accuracy:.2%}")
+
+    # Compute confusion matrix
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+
+    # Plot confusion matrix
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=label_names,
+                yticklabels=label_names)
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.title("Confusion Matrix")
+    plt.tight_layout()
+    plt.savefig(path)
+    plt.close()
+
+    return path
+
+def plot_power_samples(power_samples, output_path="power_usage_plot.png"):
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10, 4))
+    plt.plot(power_samples, label="GPU Power (W)", linewidth=1.2)
+    plt.title("GPU Power Usage Over Time")
+    plt.xlabel("Sample Number")
+    plt.ylabel("Power Draw (Watts)")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    return output_path
+@app.function(image=download_image,volumes={results_dir: results,},timeout=60 * 60,)
+def detect_ad_hominem(df, prompt, model,quant, dataset_language, prompt_language, dataset_nick_name, prompt_nick_name,hf_token):
+    import pandas as pd
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    querys = df["Speech"].to_list()
+    inference, energy_measured, duration, power_samples = run_pipeline.remote(
+         model,
+         querys,
+         prompt,
+         quant=quant,
+         hf_token=hf_token
+    )
+    inference_df, accuracy, len_unparsed = compute_results(inference, df)
+    confusion_matrix_path = plot_confusion_matrix(inference_df, path=f'{results_dir}/confusion_matrix.png')
+    plot_power_path = plot_power_samples(power_samples, output_path=f'{results_dir}/power_plot.png')
+    generate_pdf(
+        inference_df,
+        prompt,
+        dataset_language,
+        prompt_language,
+        dataset_nick_name,
+        prompt_nick_name,
+        model,
+        quant,
+        accuracy,
+        len_unparsed,
+        energy_measured,
+        duration,
+        power_samples,
+        [confusion_matrix_path, plot_power_path])
+    now=datetime.now(ZoneInfo(TIME_ZONE)).strftime("%Y-%m-%d %H:%M:%S")
+    path = f"results_{prompt_language}_{dataset_language}_{model}_{now}.csv".replace("/","_")
+    out_path = os.path.join(results_dir,path)
+    pd.DataFrame(inference).to_csv(out_path, index=False)
+    print("📁 Results saved to:", out_path)
+
+
+def generate_pdf(inference_df, prompt, dataset_language, prompt_language, dataset_nick_name, prompt_nick_name, model, quant, accuracy,len_unparsed, energy_measured, duration, power_samples,graph_paths ):
+    import resutls_processing as output_pdf
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    pdf = output_pdf.PDF()
+    pdf.add_page()
+
+    # Open csv file
+    # Generate unique identifier
+    prompt_hash = str(output_pdf.get_prompt_hash(prompt))
+    now=datetime.now(ZoneInfo(TIME_ZONE)).strftime("%Y-%m-%d %H:%M:%S")
+    info = [
+            ("Model", model),
+            ("Quantisation", quant),
+            ("Prompt Version", f'{prompt_nick_name}_{prompt_language}_{prompt_hash}'),
+            ("Dataset", dataset_nick_name),
+            ("Date & Time", now),
+            ("Duration (s)", f"{duration:.2f}"),
+            ("Accuracy", f"{accuracy:.2f}%"),
+            ("Unparsed ", len_unparsed),
+            ("n tests", len(inference_df)),
+            ("Electricity Usage (W)", f"{energy_measured:.2f}")
+        ]
+    pdf.add_general_info(info,graph_paths)
+
+    inference_df["cleaned_output"] = inference_df["result"].apply(output_pdf.clean_result)
+    for _, test in inference_df.iterrows():
+        pdf.add_test(test)
+    path = f"results_{prompt_language}_{dataset_language}_{model}_{now}.pdf".replace("/","_")
+    out_path = os.path.join(results_dir, path)
+    pdf.output(out_path)
+
 @app.function(
     image=download_image,
     timeout=60 * 60 * 3,  # 3 hour
     volumes={results_dir: results, cache_dir: model_cache},
-
 )
 def run_all_evaluations():
     import pandas as pd
     from promt_en import prompt as PROMPT_TEMPLATE_EN
     from promt_nl import prompt as PROMPT_TEMPLATE_NL
 
+
     repo_id = "TheBloke/deepseek-llm-7B-chat-GGUF"
     df = pd.read_csv("sample_data_english.csv")
     df_nl = pd.read_csv("sample_data_dutch.csv")
+    sampled_df = df.sample(n=10, random_state=42)
+    detect_ad_hominem.remote(
+        sampled_df, PROMPT_TEMPLATE_EN,
+        "google/gemma-3-27b-pt-qat-q4_0-gguf","Q4_0",
+        dataset_language="EN", prompt_language="EN", dataset_nick_name="US_election",
+        prompt_nick_name="Davids-promt",hf_token="")
 
-    accuracy_en_depseek, energy_en_depseek, tokens_en_depseek, duration_en_depseek = run_pipeline.remote(
-        repo_id, df, PROMPT_TEMPLATE_EN, "predictions_english_english_deepseek7b.csv"
-    )
-    accuracy_nl_deepseek, energy_nl_deepseek, tokens_nl_deepseek, duration_nl_deepseek = run_pipeline.remote(
-        repo_id, df_nl, PROMPT_TEMPLATE_NL, "predictions_dutch_dutch_deepseek7b.csv"
-    )
+# "unsloth/Llama-4-Scout-17B-16E-Instruct-GGUF"
+# "unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF"
+# https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF -> watch out for prompt template
+    # accuracy_en_depseek, energy_en_depseek, tokens_en_depseek, duration_en_depseek = run_pipeline.remote(
+    #     repo_id, df, PROMPT_TEMPLATE_EN, "predictions_english_english_deepseek7b.csv"
+    # )
+    # accuracy_nl_deepseek, energy_nl_deepseek, tokens_nllabels_deepseek, duration_nl_deepseek = run_pipeline.remote(
+    #     repo_id, df_nl, PROMPT_TEMPLATE_NL, "predictions_dutch_dutch_deepseek7b.csv"
+    # )
 
-    repo_id = "BramVanroy/GEITje-7B-ultra-GGUF"
-    accuracy_nl_geitje, energy_nl_geitje, tokens_nl_geitje, duration_nl_geitje = run_pipeline.remote(
-        repo_id, df_nl, PROMPT_TEMPLATE_NL, "predictions_dutch_dutch_geitje.csv"
-    )
-    accuracy_en_geitje, energy_en_geitje, tokens_en_geitje, duration_en_geitje = run_pipeline.remote(
-        repo_id, df, PROMPT_TEMPLATE_EN, "predictions_english_english_geitje.csv"
-    )
+    # repo_id = "BramVanroy/GEITje-7B-ultra-GGUF"
+    # accuracy_nl_geitje, energy_nl_geitje, tokens_nl_geitje, duration_nl_geitje = run_pipeline.remote(
+    #     repo_id, df_nl, PROMPT_TEMPLATE_NL, "predictions_dutch_dutch_geitje.csv"
+    # )
+    # accuracy_en_geitje, energy_en_geitje, tokens_en_geitje, duration_en_geitje = run_pipeline.remote(
+    #     repo_id, df, PROMPT_TEMPLATE_EN, "predictions_english_english_geitje.csv"
+    # )
 
-    print(f"EN-EN DeepSeek ➤ Accuracy: {accuracy_en_depseek:.2f}, Energy: {energy_en_depseek} J, Tokens: {tokens_en_depseek}, Duration: {duration_en_depseek:.2f}s")
-    print(f"NL-NL DeepSeek ➤ Accuracy: {accuracy_nl_deepseek:.2f}, Energy: {energy_nl_deepseek} J, Tokens: {tokens_nl_deepseek}, Duration: {duration_nl_deepseek:.2f}s")
-    print(f"EN-EN GEITje     ➤ Accuracy: {accuracy_en_geitje:.2f}, Energy: {energy_en_geitje} J, Tokens: {tokens_en_geitje}, Duration: {duration_en_geitje:.2f}s")
-    print(f"NL-NL GEITje     ➤ Accuracy: {accuracy_nl_geitje:.2f}, Energy: {energy_nl_geitje} J, Tokens: {tokens_nl_geitje}, Duration: {duration_nl_geitje:.2f}s")
+    # print(f"EN-EN DeepSeek ➤ Accuracy: {accuracy_en_depseek:.2f}, Energy: {energy_en_depseek} J, Tokens: {tokens_en_depseek}, Duration: {duration_en_depseek:.2f}s")
+    # print(f"NL-NL DeepSeek ➤ Accuracy: {accuracy_nl_deepseek:.2f}, Energy: {energy_nl_deepseek} J, Tokens: {tokens_nl_deepseek}, Duration: {duration_nl_deepseek:.2f}s")
+    # print(f"EN-EN GEITje     ➤ Accuracy: {accuracy_en_geitje:.2f}, Energy: {energy_en_geitje} J, Tokens: {tokens_en_geitje}, Duration: {duration_en_geitje:.2f}s")
+    # print(f"NL-NL GEITje     ➤ Accuracy: {accuracy_nl_geitje:.2f}, Energy: {energy_nl_geitje} J, Tokens: {tokens_nl_geitje}, Duration: {duration_nl_geitje:.2f}s")
+    # accuracy_en_gemma3, energy_en_gemma3, tokens_en_gemma3, duration_en_gemma3 = run_pipeline.remote(
+    #      "google/gemma-3-27b-pt-qat-q4_0-gguf",
+    #      df,
+    #      PROMPT_TEMPLATE_EN,
+    #      "predictions_english_english_gemma3.csv",
+    #      quant="Q4_0"
+    # )
+    #
+    #print(f"EN-EN gemma3 ➤ Accuracy: {accuracy_en_gemma3:.2f}, Energy: {energy_en_gemma3} J, Tokens: {tokens_en_gemma3}, Duration: {duration_en_gemma3:.2f}s")
+
 
 @app.local_entrypoint()
 def main():
     print("📤 Submitting cloud job...")
     run_all_evaluations.remote()
+
     print("✅ Job submitted! You can now close your laptop.")
-
-
